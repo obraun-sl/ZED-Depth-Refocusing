@@ -1,23 +1,8 @@
 ///////////////////////////////////////////////////////////////////////////
 //
-// Copyright (c) 2016, STEREOLABS.
-//
-// All rights reserved.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-//
-///////////////////////////////////////////////////////////////////////////
-
+// Copyright (c) 2021, .
+// Author: Olivier Braun
+//////////////////////////////////////////////////////////////////////////
 
 /****************************************************************************************************
  ** This sample demonstrates how to grab and process images/depth on a CUDA kernel                 **
@@ -31,8 +16,8 @@
 #include <sl/Camera.hpp>
 
 // OpenGL extensions
-#include "GL/glew.h"
-#include "GL/glut.h"
+#include <GL/glew.h>
+#include <GL/freeglut.h>
 
 // CUDA specific for OpenGL interoperability
 #include <cuda_gl_interop.h>
@@ -52,7 +37,7 @@ GLuint imageTex;
 cudaGraphicsResource* pcuImageRes;
 
 // ZED Camera object
-sl::Camera* zed;
+sl::Camera zed;
 
 // sl::Mat ressources
 sl::Mat gpuImageLeft;
@@ -70,10 +55,10 @@ int y_focus_point;
 float depth_focus_point = 0.f;
 float norm_depth_focus_point = 0.f;
 
+float min_depth_focus_mm = 500.f;//Minimum depth focus range in mm
+float max_depth_focus_mm = 15000.f;//Maximum depth focus range in mm
 
- 
-bool quit;
- 
+
 inline float clamp(float v, float v_min, float v_max) {
 	return v < v_min ? v_min : (v > v_max ? v_max : v);
 }
@@ -85,46 +70,59 @@ void mouseButtonCallback(int button, int state, int x, int y) {
  		x_focus_point = x;
 		y_focus_point = y;
 		//--> get the depth at the mouse click point
-		gpuDepthMap.getValue<sl::float1>(x_focus_point, y_focus_point, &depth_focus_point, sl::MEM_GPU);
+        gpuDepthMap.getValue<sl::float1>(x_focus_point, y_focus_point, &depth_focus_point, sl::MEM::GPU);
 
 
 		//--> check that the value is a number...
 		if (std::isfinite(depth_focus_point))
 		{
 			std::cout << " Focus point set at : " << depth_focus_point << " mm at " << x_focus_point << "," << y_focus_point << std::endl;
-			norm_depth_focus_point = (zed->getDepthMaxRangeValue() - depth_focus_point) / (zed->getDepthMaxRangeValue() - zed->getDepthMinRangeValue());
+            norm_depth_focus_point = (max_depth_focus_mm - depth_focus_point) / (max_depth_focus_mm - min_depth_focus_mm);
 			clamp(norm_depth_focus_point, 0.f, 1.f);
 		}
 	}
 }
  
 
+
+void close() {
+
+    //#Cleaning
+    gpuImageLeft.free();
+    gpuImageOutput.free();
+    gpuDepthMap.free();
+    gpuDepthMapNorm.free();
+    zed.close();
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glutDestroyWindow(1);
+}
+
 void draw() {
 
 	sl::RuntimeParameters params;
-	params.sensing_mode = SENSING_MODE_FILL;
+    params.sensing_mode = sl::SENSING_MODE::FILL;
 
-	int res = zed->grab(params);
+    sl::ERROR_CODE res = zed.grab(params);
 
-    if (res == 0) {
+    if (res == sl::ERROR_CODE::SUCCESS) {
 
 
 		/// Retrieve Image and Depth
-        zed->retrieveImage(gpuImageLeft,sl::VIEW_LEFT,sl::MEM_GPU);
-	    int err = zed->retrieveMeasure(gpuDepthMap, sl::MEASURE_DEPTH, sl::MEM_GPU);
+        zed.retrieveImage(gpuImageLeft,sl::VIEW::LEFT,sl::MEM::GPU);
+        zed.retrieveMeasure(gpuDepthMap, sl::MEASURE::DEPTH, sl::MEM::GPU);
 
  		/// Process Image with CUDA
         ///--> normalize the depth map and make separable convolution
-		normalizeDepth(gpuDepthMap.getPtr<float>(MEM_GPU), gpuDepthMapNorm.getPtr<float>(MEM_GPU), gpuDepthMap.getStep(MEM_GPU),  zed->getDepthMinRangeValue(), zed->getDepthMaxRangeValue(), gpuDepthMap.getWidth(), gpuDepthMap.getHeight());
-		convolutionRowsGPU((::uchar4*)d_buffer_image,(::uchar4*)gpuImageLeft.getPtr<sl::uchar4>(MEM_GPU), gpuDepthMapNorm.getPtr<float>(MEM_GPU), gpuImageLeft.getWidth(), gpuImageLeft.getHeight(), gpuDepthMapNorm.getStep(MEM_GPU), norm_depth_focus_point);
-		convolutionColumnsGPU((::uchar4*)gpuImageOutput.getPtr<sl::uchar4>(MEM_GPU), (::uchar4*)d_buffer_image, gpuDepthMapNorm.getPtr<float>(MEM_GPU), gpuImageLeft.getWidth(), gpuImageLeft.getHeight(), gpuDepthMapNorm.getStep(MEM_GPU), norm_depth_focus_point);
+        normalizeDepth(gpuDepthMap.getPtr<float>(sl::MEM::GPU), gpuDepthMapNorm.getPtr<float>(sl::MEM::GPU), gpuDepthMap.getStep(sl::MEM::GPU),  min_depth_focus_mm, max_depth_focus_mm, gpuDepthMap.getWidth(), gpuDepthMap.getHeight());
+        convolutionRowsGPU((::uchar4*)d_buffer_image,(::uchar4*)gpuImageLeft.getPtr<sl::uchar4>(sl::MEM::GPU), gpuDepthMapNorm.getPtr<float>(sl::MEM::GPU), gpuImageLeft.getWidth(), gpuImageLeft.getHeight(), gpuDepthMapNorm.getStep(sl::MEM::GPU), norm_depth_focus_point);
+        convolutionColumnsGPU((::uchar4*)gpuImageOutput.getPtr<sl::uchar4>(sl::MEM::GPU), (::uchar4*)d_buffer_image, gpuDepthMapNorm.getPtr<float>(sl::MEM::GPU), gpuImageLeft.getWidth(), gpuImageLeft.getHeight(), gpuDepthMapNorm.getStep(sl::MEM::GPU), norm_depth_focus_point);
 	
   
 		/// Map to OpenGL and display
 		cudaArray_t ArrIm;
         cudaGraphicsMapResources(1, &pcuImageRes, 0);
         cudaGraphicsSubResourceGetMappedArray(&ArrIm, pcuImageRes, 0, 0);
-        cudaMemcpy2DToArray(ArrIm, 0, 0, gpuImageOutput.getPtr<sl::uchar4>(sl::MEM_GPU), gpuImageOutput.getStepBytes(sl::MEM_GPU), gpuImageOutput.getWidth() * sizeof(sl::uchar4), gpuImageOutput.getHeight(), cudaMemcpyDeviceToDevice);
+        cudaMemcpy2DToArray(ArrIm, 0, 0, gpuImageOutput.getPtr<sl::uchar4>(sl::MEM::GPU), gpuImageOutput.getStepBytes(sl::MEM::GPU), gpuImageOutput.getWidth() * sizeof(sl::uchar4), gpuImageOutput.getHeight(), cudaMemcpyDeviceToDevice);
         cudaGraphicsUnmapResources(1, &pcuImageRes, 0);
 
        		
@@ -157,12 +155,6 @@ void draw() {
 
     glutPostRedisplay();
 
-    if (quit) {
-        glutDestroyWindow(1);
-
-        delete zed;
-        glBindTexture(GL_TEXTURE_2D, 0);
-    }
 }
 
 int main(int argc, char **argv) {
@@ -183,36 +175,32 @@ int main(int argc, char **argv) {
     glutInitWindowSize(1280, 720);
 
     //Create Window
-    glutCreateWindow("ZED DISPARITY Viewer");
+    glutCreateWindow("ZED Depth Refocusing");
 
     //init GLEW Library
     glewInit();
 
-
-    zed = new sl::Camera();
-
-
     sl::InitParameters parameters;
-	parameters.depth_mode = sl::DEPTH_MODE_PERFORMANCE;
-	parameters.camera_resolution = sl::RESOLUTION_HD720;
-	parameters.coordinate_units = UNIT_MILLIMETER;
+    parameters.depth_mode = sl::DEPTH_MODE::QUALITY;
+    parameters.camera_resolution = sl::RESOLUTION::HD720;
+    parameters.coordinate_units = sl::UNIT::MILLIMETER;
 	parameters.depth_minimum_distance = 50.0;
 
 
 
-	sl::ERROR_CODE err = zed->open(parameters);
+    sl::ERROR_CODE err = zed.open(parameters);
     // ERRCODE display
-    std::cout << "ZED Init Err : " << sl::errorCode2str(err) << std::endl;
-    if (err != sl::SUCCESS) {
-        delete zed;
+    std::cout << "ZED Init Err : " << sl::toString(err) << std::endl;
+    if (err != sl::ERROR_CODE::SUCCESS) {
+        zed.close();
         return -1;
     }
 
-    quit = false;
 
     // Get Image Size
-	int image_width_ = zed->getResolution().width;
-	int image_height_ = zed->getResolution().height;
+    sl::Resolution cam_resolution_ = zed.getCameraInformation().camera_configuration.resolution;
+    int image_width_ = cam_resolution_.width;
+    int image_height_ = cam_resolution_.height;
 
     cudaError_t err1;
 
@@ -230,10 +218,10 @@ int main(int argc, char **argv) {
 	
 
 	// Alloc sl::Mat and tmp buffer
-	gpuImageLeft.alloc(zed->getResolution(), sl::MAT_TYPE_8U_C4, sl::MEM_GPU);
-	gpuImageOutput.alloc(zed->getResolution(), sl::MAT_TYPE_8U_C4, sl::MEM_GPU);
-	gpuDepthMap.alloc(zed->getResolution(), sl::MAT_TYPE_32F_C1, sl::MEM_GPU);
-	gpuDepthMapNorm.alloc(zed->getResolution(), sl::MAT_TYPE_32F_C1, sl::MEM_GPU);
+    gpuImageLeft.alloc(cam_resolution_, sl::MAT_TYPE::U8_C4, sl::MEM::GPU);
+    gpuImageOutput.alloc(cam_resolution_, sl::MAT_TYPE::U8_C4, sl::MEM::GPU);
+    gpuDepthMap.alloc(cam_resolution_, sl::MAT_TYPE::F32_C1, sl::MEM::GPU);
+    gpuDepthMapNorm.alloc(cam_resolution_, sl::MAT_TYPE::F32_C1, sl::MEM::GPU);
 	cudaMalloc((void **)&d_buffer_image, image_width_*image_height_ * 4);
 
 
@@ -259,6 +247,7 @@ int main(int argc, char **argv) {
     //Set Draw Loop
     glutDisplayFunc(draw);
 	glutMouseFunc(mouseButtonCallback);
+    glutCloseFunc(close);
     glutMainLoop();
 
     return 0;
